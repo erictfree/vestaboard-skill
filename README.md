@@ -171,3 +171,7 @@ vestaboard/
 - The agent is instructed never to print the key or token, and never to write
   to the board unless you explicitly ask it to.
 - All traffic stays on your LAN.
+
+## License
+
+MIT. Created by Eric Freeman. See [LICENSE](LICENSE).
