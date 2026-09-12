@@ -16,6 +16,15 @@ The skill knows the board is 6 rows by 22 columns, how to word-wrap and center
 text, how to use the colored tiles, and how to pack a list or schedule into a
 readable grid.
 
+## Supported boards
+
+This skill was built and tested against the original **Vestaboard** (the
+Flagship, 6 rows x 22 columns). It has not been tested with the **Vestaboard
+Note** or **Note Array**. Adapting it should be straightforward if those boards
+speak the same Local API: the grid size lives in one place in
+`scripts/vestaboard.py` (`ROWS, COLS`), and the rest of the client is
+geometry-agnostic. If you get it working on a Note, a pull request is welcome.
+
 ## What you need
 
 - A Vestaboard (Flagship, 6 x 22) that is paired and online.
