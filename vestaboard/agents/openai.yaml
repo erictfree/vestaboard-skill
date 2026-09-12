@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vestaboard"
+  short_description: "Control and read local Vestaboard displays"
+  default_prompt: "Use $vestaboard to show a message on the appropriate local board."
