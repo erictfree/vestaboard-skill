@@ -312,8 +312,13 @@ def _my_prefix() -> str | None:
         s.close()
 
 
-def _board_responds(host: str, api_key: str | None, timeout: float = 1.5) -> bool:
-    """True if `host` looks like a Vestaboard answering on the Local API port."""
+def _probe(host: str, api_key: str | None, timeout: float = 1.5) -> str | None:
+    """
+    Classify what answers at `host`:
+      'auth'  - a Vestaboard that accepted our key (HTTP 200)
+      'board' - a Vestaboard that rejected our key, or answered without one
+      None    - nothing there, or something that is not a Vestaboard
+    """
     headers = {"X-Vestaboard-Local-Api-Key": api_key} if api_key else {}
     try:
         status, resp_headers, _ = _http(
@@ -321,26 +326,48 @@ def _board_responds(host: str, api_key: str | None, timeout: float = 1.5) -> boo
             headers=headers, timeout=timeout,
         )
     except BoardUnreachable:
-        return False
+        return None
     server = next((v for k, v in resp_headers.items() if k.lower() == "server"), "")
     if "airtunes" in server.lower():  # macOS AirPlay also listens on :7000
-        return False
-    if "vestaboard" in server.lower() or "javalin" in server.lower():
-        return True  # it's a board, even if it rejects this key (401/403)
-    return status == 200
+        return None
+    is_board = "vestaboard" in server.lower() or "javalin" in server.lower()
+    if status == 200:
+        return "auth" if (api_key and is_board) else "board"
+    return "board" if is_board else None
+
+
+def discover_all(api_key: str | None = None) -> list[tuple[str, str]]:
+    """Scan our /24. Returns [(ip, 'auth'|'board'), ...] for every board found."""
+    prefix = _my_prefix()
+    if not prefix:
+        return []
+    hosts = [f"{prefix}.{i}" for i in range(1, 255)]
+    with ThreadPoolExecutor(max_workers=128) as pool:
+        results = pool.map(lambda h: _probe(h, api_key), hosts)
+        return [(ip, kind) for ip, kind in zip(hosts, results) if kind]
 
 
 def discover(api_key: str | None = None) -> str | None:
-    """Scan our /24 for a board. Returns its IP, or None."""
-    prefix = _my_prefix()
-    if not prefix:
-        return None
-    hosts = [f"{prefix}.{i}" for i in range(1, 255)]
-    with ThreadPoolExecutor(max_workers=128) as pool:
-        results = pool.map(lambda h: _board_responds(h, api_key), hosts)
-        for ip, ok in zip(hosts, results):
-            if ok:
-                return ip
+    """
+    Scan our /24 for *our* board. Prefers a board that accepts the key; falls
+    back to the only board on the network. Returns None when nothing answers or
+    when several boards answer and none accepts the key (ambiguous).
+    """
+    found = discover_all(api_key)
+    auth = [ip for ip, kind in found if kind == "auth"]
+    if len(auth) == 1:
+        return auth[0]
+    if len(auth) > 1:
+        print(f"warning: several boards accept this key: {', '.join(auth)}; "
+              f"using {auth[0]}. Set VESTABOARD_HOST to choose.", file=sys.stderr)
+        return auth[0]
+    if len(found) == 1:
+        return found[0][0]
+    if found:
+        print("warning: several Vestaboards answered but none accepted the key: "
+              + ", ".join(ip for ip, _ in found)
+              + ". Not guessing; set VESTABOARD_HOST to the right one.",
+              file=sys.stderr)
     return None
 
 
@@ -353,6 +380,10 @@ class Vestaboard:
     ):
         self.api_key = api_key or load_key()
         self.host = host or load_host()
+        # A host the user named (arg, env, or config) is never replaced by a guess.
+        self.host_is_configured = bool(
+            host or os.environ.get("VESTABOARD_HOST") or load_config().get("host")
+        )
         self.timeout = timeout
         self.auto_discover = auto_discover
 
@@ -368,17 +399,35 @@ class Vestaboard:
         save_config(cfg)
 
     def _ensure_reachable(self) -> None:
-        """If the saved host doesn't answer, scan the LAN and re-cache."""
-        if _board_responds(self.host, self.api_key, timeout=2.5):
-            return
+        """
+        Make sure the configured host answers. If it does not and the host was
+        never configured (mDNS default), discover the board and save its IP.
+        A configured host is never silently replaced: writing to the wrong
+        physical board is not recoverable, so we raise with the details instead.
+        """
+        for timeout in (3.0, 6.0):  # the Note can be slow to answer; retry once
+            if _probe(self.host, self.api_key, timeout=timeout):
+                return
         if not self.auto_discover:
             raise BoardUnreachable(f"Board not reachable at {self.host}")
         print(f"{self.host} did not answer; scanning the network for the board ...")
-        found = discover(self.api_key)
+        found = discover_all(self.api_key)
         if not found:
-            raise BoardUnreachable("Could not find a Vestaboard on this network.")
-        self._cache_host(found)
-        print(f"Found the board at {found} (saved).")
+            raise BoardUnreachable(
+                f"{self.host} did not answer and no Vestaboard was found on this network.")
+        ips = ", ".join(f"{ip} ({kind})" for ip, kind in found)
+        if self.host_is_configured:
+            raise BoardUnreachable(
+                f"Configured board {self.host} did not answer. Other board(s) found: {ips}.\n"
+                f"  Not switching automatically. If your board's address changed, set\n"
+                f"  VESTABOARD_HOST=<ip> or run `discover` to update the config on purpose.")
+        ip = discover(self.api_key)
+        if not ip:
+            raise BoardUnreachable(
+                f"Several Vestaboards found ({ips}) and none accepted the key. "
+                f"Set VESTABOARD_HOST to the right one.")
+        self._cache_host(ip)
+        print(f"Found the board at {ip} (saved).")
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -542,12 +591,22 @@ def _main(argv: list[str]) -> int:
         vb = Vestaboard()
 
         if cmd == "discover":
+            found = discover_all(vb.api_key)
+            for ip, kind in found:
+                note = "accepts this key" if kind == "auth" else "Vestaboard, key rejected/untested"
+                print(f"  {ip:15} {note}")
             ip = discover(vb.api_key)
             if ip:
+                if vb.host_is_configured and ip != vb.host:
+                    print(f"Configured host is {vb.host}; updating config to {ip}.")
                 vb._cache_host(ip)
                 print(f"Board found at {ip} (saved).")
                 return 0
-            print("No Vestaboard found on this network.")
+            if found:
+                print("Could not tell which board is yours. Set VESTABOARD_HOST or edit "
+                      f"{CONFIG_FILE} by hand.")
+            else:
+                print("No Vestaboard found on this network.")
             return 1
 
         if cmd in ("test", "read"):

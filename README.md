@@ -116,7 +116,7 @@ All commands are subcommands of `scripts/vestaboard.py`:
 | `rows "R1" "R2" ...` | One argument per row, top-anchored, no wrapping |
 | `grid <JSON or file or ->` | Write a raw 6 x 22 grid of tile codes (see `references/layouts.md`) |
 | `clear` | Blank the board |
-| `discover` | Scan the local network for the board and save its IP |
+| `discover` | Scan the local network, list every board found, and save the one that accepts your key |
 
 Color tiles go inline in text as `{red}`, `{orange}`, `{yellow}`, `{green}`,
 `{blue}`, `{violet}`, `{white}`, `{black}`. Letters are always white on black;
@@ -143,7 +143,8 @@ Environment variables override the file when set:
 | `VESTABOARD_PORT` | Local API port (default `7000`) |
 
 **More than one board?** Give each its own config directory and pick one with
-`VESTABOARD_CONFIG_DIR` when you run the script.
+`VESTABOARD_CONFIG_DIR` when you run the script. Set `host` explicitly in each
+config so the script never has to guess which board is which.
 
 ## Troubleshooting
 
@@ -152,6 +153,14 @@ Environment variables override the file when set:
   subnet and saves the board's IP. If the agent runs commands in a sandbox
   that blocks local-network access, approve local network access for the
   command when it asks.
+- **"Configured board ... did not answer. Other board(s) found: ..."** Your
+  configured host is down or its IP changed, and a different Vestaboard is on
+  the network. The script will not switch boards on its own. If your board
+  really moved, run `discover` (it prefers the board that accepts your key) or
+  set the `host` in `config.json` to the right IP.
+- **Two or more boards on one network.** Give each board its own config
+  directory and select it with `VESTABOARD_CONFIG_DIR`. Discovery only picks a
+  board automatically when exactly one accepts your key.
 - **"HTTP 401" or "HTTP 403".** The key was rejected. If the board was
   replaced or factory-reset, it needs a fresh enablement token. Request one
   at <https://www.vestaboard.com/local-api> and run `enable` again.

@@ -122,8 +122,13 @@ item per row.
 ## Handle connectivity and timing
 
 The Local API is reachable only from the same LAN as the board. The script
-tries the saved host (or `vestaboard.local`), and scans the local /24 subnet
-for the board if that fails, caching the address it finds.
+tries the configured host (or `vestaboard.local`). If no host was configured
+and that fails, it scans the local subnet and saves the board it finds. If a
+host *was* configured and does not answer, the script never switches to a
+different board on its own, because writing to the wrong physical display is
+not recoverable; it reports the other boards it saw and tells the user to set
+`VESTABOARD_HOST` or run `discover` deliberately. Relay that message; do not
+run `discover` yourself to work around it unless the user asks.
 
 If a command fails because the agent sandbox blocks local-network access, rerun
 the same command with the normal approval for local-network access. Do not
